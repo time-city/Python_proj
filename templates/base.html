@@ -54,6 +54,42 @@
     style="margin-top: 4rem; padding: 2rem 0; text-align: center; color: var(--text-muted); border-top: 1px solid var(--glass-border);">
     <p>Built with Django & AI &copy; {% now "Y" %}</p>
   </footer>
+  <script>
+    (() => {
+      const fallbackImage = "{% static 'img/poster-fallback.svg' %}";
+
+      function applyFallback(image) {
+        if (!(image instanceof HTMLImageElement)) {
+          return;
+        }
+
+        if (image.dataset.fallbackApplied === 'true') {
+          return;
+        }
+
+        image.dataset.fallbackApplied = 'true';
+        image.src = fallbackImage;
+
+        if (!image.alt || image.alt.trim() === '') {
+          image.alt = 'Fallback poster';
+        }
+      }
+
+      document.addEventListener('error', (event) => {
+        applyFallback(event.target);
+      }, true);
+
+      document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('img').forEach((image) => {
+          const source = image.getAttribute('src');
+
+          if (!source || source.trim() === '') {
+            applyFallback(image);
+          }
+        });
+      });
+    })();
+  </script>
 </body>
 
 </html>

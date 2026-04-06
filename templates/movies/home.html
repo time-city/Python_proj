@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block content %}
 <h1>Discover Your Next <span style="color: var(--secondary-color);">Favorite</span></h1>
@@ -48,10 +49,7 @@
         {% if movie.poster_path %}
         <img src="{{ movie.poster_path }}" alt="{{ movie.title }}" class="movie-poster">
         {% else %}
-        <div class="movie-poster"
-            style="background: #2d3748; display: flex; align-items: center; justify-content: center;">
-            <i class="fas fa-film fa-3x" style="color: #4a5568;"></i>
-        </div>
+        <img src="{% static 'img/poster-fallback.svg' %}" alt="{{ movie.title }}" class="movie-poster">
         {% endif %}
         <div class="movie-info">
             <h3 class="movie-title">{{ movie.title }}</h3>

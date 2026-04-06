@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block content %}
 <div class="movie-detail-header">
@@ -6,10 +7,7 @@
         {% if movie.poster_path %}
         <img src="{{ movie.poster_path }}" alt="{{ movie.title }}" class="poster-large">
         {% else %}
-        <div class="poster-large"
-            style="height: 450px; background: #2d3748; display: flex; align-items: center; justify-content: center;">
-            <i class="fas fa-film fa-4x"></i>
-        </div>
+        <img src="{% static 'img/poster-fallback.svg' %}" alt="{{ movie.title }}" class="poster-large">
         {% endif %}
     </div>
 
@@ -55,7 +53,7 @@
             {% if rec.poster_path %}
             <img src="{{ rec.poster_path }}" alt="{{ rec.title }}" class="movie-poster">
             {% else %}
-            <div class="movie-poster" style="background: #2d3748;"></div>
+            <img src="{% static 'img/poster-fallback.svg' %}" alt="{{ rec.title }}" class="movie-poster">
             {% endif %}
             <div class="movie-info">
                 <h3 class="movie-title" style="font-size: 1rem;">{{ rec.title }}</h3>
@@ -104,8 +102,7 @@
             <div class="review-header">
                 <div>
                     <strong>{{ review.user_name }}</strong>
-                    <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">{{
-                        review.created_at|timesince }} ago</span>
+                    <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">{{ review.created_at|timesince }} ago</span>
                 </div>
                 <div>
                     <span class="rating-badge">{{ review.rating }}/10</span>
