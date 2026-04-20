@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "apps.accounts.apps.AccountsConfig",
 
     "apps.movies.apps.MoviesConfig",
+    "graphene_django",
 ]
 
 MIDDLEWARE = [
@@ -124,4 +125,8 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+}
+
+GRAPHENE = {
+    "SCHEMA": "config.schema.schema",
 }
