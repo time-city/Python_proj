@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 
@@ -25,7 +26,8 @@ class Movie(models.Model):
     trailer_url = models.CharField(max_length=500, null=True, blank=True)
     # AI Metadata for filtering/recommendation
     ai_metadata = models.TextField(null=True, blank=True, help_text="AI generated tags and features")
-    
+    sentiment_score = models.FloatField(null=True, blank=True, help_text="0.0 negative .. 0.5 neutral .. 1.0 positive")
+
     genres = models.ManyToManyField(Genre, related_name='movies', db_table='movie_genres')
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -60,3 +62,25 @@ class Review(models.Model):
 
     def __str__(self):
         return f"{self.user_name} on {self.movie.title}"
+
+
+class UserInteraction(models.Model):
+    """Signals collected from authenticated users — drives collaborative filtering."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='interactions')
+    movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name='interactions')
+
+    rating = models.FloatField(null=True, blank=True)
+    comment = models.TextField(null=True, blank=True)
+    sentiment_score = models.FloatField(null=True, blank=True)
+
+    watched = models.BooleanField(default=False)
+    watch_time_pct = models.FloatField(default=0.0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'user_interactions'
+        unique_together = ('user', 'movie')
+
+    def __str__(self):
+        return f"{self.user_id} → {self.movie_id}"

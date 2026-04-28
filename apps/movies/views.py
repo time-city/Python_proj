@@ -1,11 +1,9 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib import messages
-from .models import Movie, Review, Genre
-from .services import analyze_sentiment, get_recommendations, semantic_search, get_semantic_model
+from .models import Movie, Review, Genre, UserInteraction
+from .services import analyze_sentiment, get_recommendations, semantic_search
 from .forms import MovieForm
 from django.utils.text import slugify
-
-from django.db.models import Q
 
 def home(request):
     """
@@ -49,10 +47,10 @@ def movie_detail(request, slug):
     """
     movie = get_object_or_404(Movie, slug=slug)
     reviews = movie.reviews.all().order_by('-created_at')
-    
-    # Get AI Recommendations
-    recommendations = get_recommendations(movie.id, top_n=4)
-    
+
+    user_id = request.user.id if request.user.is_authenticated else None
+    recommendations = get_recommendations(movie_id=movie.id, user_id=user_id, top_n=4)
+
     context = {
         'movie': movie,
         'reviews': reviews,
@@ -69,27 +67,42 @@ def add_review(request, slug):
         user_name = request.POST.get('user_name')
         if not user_name and request.user.is_authenticated:
             user_name = request.user.username
-        
+
         comment = request.POST.get('comment')
         rating = request.POST.get('rating')
-        
+
         if comment and rating:
-            # AI Logic: Analyze sentiment
             sentiment = analyze_sentiment(comment)
-            
+
             Review.objects.create(
                 movie=movie,
                 user_name=user_name,
                 comment=comment,
                 rating=rating,
-                sentiment_label=sentiment
+                sentiment_label=sentiment["label"],
             )
+
+            if request.user.is_authenticated:
+                try:
+                    rating_val = float(rating)
+                except (TypeError, ValueError):
+                    rating_val = None
+                UserInteraction.objects.update_or_create(
+                    user=request.user,
+                    movie=movie,
+                    defaults={
+                        'rating': rating_val,
+                        'comment': comment,
+                        'sentiment_score': sentiment["score"],
+                    },
+                )
+
             messages.success(request, 'Review added!')
         else:
             messages.error(request, 'Please provide both a comment and a rating.')
-            
+
         return redirect('movie_detail', slug=slug)
-    
+
     return redirect('home')
 
 def upload_movie(request):
