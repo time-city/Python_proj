@@ -24,4 +24,5 @@ class UserInteractionAdmin(admin.ModelAdmin):
     list_display = ('user', 'movie', 'rating', 'sentiment_score', 'watched', 'watch_time_pct', 'created_at')
     list_filter = ('watched',)
     search_fields = ('user__username', 'movie__title', 'comment')
-    autocomplete_fields = ('user', 'movie')
+    autocomplete_fields = ('movie',)
+    raw_id_fields = ('user',)

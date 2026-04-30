@@ -43,6 +43,14 @@
     {% endfor %}
 </div>
 
+{% if is_personalized %}
+<div style="margin: 1.5rem 0 0.5rem; display: flex; align-items: center; gap: 0.6rem;">
+    <i class="fas fa-sparkles" style="color: var(--secondary-color);"></i>
+    <h2 style="margin: 0; font-size: 1.3rem;">Personalized for you</h2>
+    <span style="color: var(--text-muted); font-size: 0.85rem;">Based on your ratings & comments</span>
+</div>
+{% endif %}
+
 <div class="movie-grid">
     {% for movie in movies %}
     <a href="{% url 'movie_detail' movie.slug %}" class="movie-card">

@@ -76,8 +76,8 @@
                     value="{% if user.is_authenticated %}{{ user.username }}{% endif %}" required>
             </div>
             <div class="form-group">
-                <select name="rating" class="form-control" required style="color: #fff; background: rgba(0,0,0,0.2);">
-                    <option value="">Select Rating</option>
+                <select name="rating" class="form-control" style="color: #fff; background: rgba(0,0,0,0.2);">
+                    <option value="">Rating (optional)</option>
                     <option value="10">10 - Masterpiece</option>
                     <option value="9">9 - Amazing</option>
                     <option value="8">8 - Great</option>
@@ -89,8 +89,8 @@
                 </select>
             </div>
             <div class="form-group">
-                <textarea name="comment" class="form-control" rows="3" placeholder="What did you think?"
-                    required></textarea>
+                <textarea name="comment" class="form-control" rows="3"
+                    placeholder="Share your thoughts (or leave blank if you only want to rate)"></textarea>
             </div>
             <button type="submit" class="btn btn-primary">Submit Review</button>
         </form>
@@ -105,7 +105,9 @@
                     <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">{{ review.created_at|timesince }} ago</span>
                 </div>
                 <div>
+                    {% if review.rating %}
                     <span class="rating-badge">{{ review.rating }}/10</span>
+                    {% endif %}
                 </div>
             </div>
             <p>{{ review.comment }}</p>

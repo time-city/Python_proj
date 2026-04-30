@@ -10,7 +10,7 @@ from sentence_transformers import SentenceTransformer
 from django.db import models
 from django.db.models import Q
 
-from .models import Movie, UserInteraction
+from .models import Movie, Genre, UserInteraction
 from .ml_utils import analyze_sentiment  # re-exported for callers  # noqa: F401
 
 # --- Cached models / embeddings ---
@@ -159,7 +159,14 @@ def build_cf_model():
     _item_factors = svd.components_.T
 
 
+def ensure_cf_model():
+    """Lazy-train CF model the first time it is needed in this process."""
+    if _user_factors is None and UserInteraction.objects.exists():
+        build_cf_model()
+
+
 def get_collaborative_recommendations(user_id, top_k=20):
+    ensure_cf_model()
     if _user_factors is None or _cf_user_index is None or user_id not in _cf_user_index:
         return []
 
@@ -199,12 +206,19 @@ def _content_scores_for(movie_id, top_n):
 
 def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
     """
-    Three-way weighted fusion: collaborative + content + sentiment-adjusted rating,
-    plus a small additive recency nudge and genre-aware diversity re-ranking.
+    Three-way weighted fusion. Weights are chosen by intent:
+      - Seed movie given ("similar to this") → content dominates, CF only re-ranks
+        the content pool. Prevents CF from pulling in globally-liked but unrelated items.
+      - No seed (home feed)                  → CF dominates, content nudges.
     """
-    ALPHA = 0.50   # collaborative
-    BETA = 0.35    # content (FAISS)
-    GAMMA = 0.15   # sentiment-adjusted rating
+    if movie_id:
+        # "Similar to this movie" intent — content is primary, CF is the personalization layer
+        ALPHA, BETA, GAMMA = 0.25, 0.60, 0.15
+        seed_provided = True
+    else:
+        # "For you" feed intent — CF is primary, content scores are 0 anyway (no seed)
+        ALPHA, BETA, GAMMA = 0.55, 0.30, 0.15
+        seed_provided = False
 
     content_scores = _content_scores_for(movie_id, top_n)
 
@@ -215,9 +229,26 @@ def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
         for rank, mid in enumerate(cf_ids):
             cf_scores[mid] = 1.0 - rank / n if n else 0.0
 
-    all_ids = set(content_scores) | set(cf_scores)
+    # Build the exclude set: seed movie + everything user has already interacted with
+    exclude_ids = set()
+    if movie_id:
+        exclude_ids.add(movie_id)
+    if user_id:
+        exclude_ids.update(
+            UserInteraction.objects.filter(user_id=user_id)
+            .values_list('movie_id', flat=True)
+        )
+
+    # Candidate pool depends on intent:
+    # - With seed: only movies similar to seed (content pool). CF re-ranks within.
+    # - Without seed: union of CF picks + (empty) content pool.
+    if seed_provided:
+        all_ids = set(content_scores) - exclude_ids
+    else:
+        all_ids = (set(content_scores) | set(cf_scores)) - exclude_ids
+
     if not all_ids:
-        qs = Movie.objects.exclude(id=movie_id) if movie_id else Movie.objects.all()
+        qs = Movie.objects.exclude(id__in=exclude_ids) if exclude_ids else Movie.objects.all()
         return list(qs.order_by('-rating')[:top_n])
 
     results = []
@@ -262,6 +293,64 @@ def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
     if len(diverse) < top_n:
         diverse.extend(remainder[:top_n - len(diverse)])
     return diverse[:top_n]
+
+
+def get_user_feed(user_id, top_n=24):
+    """
+    Personalized home feed.
+    Strategy: take user's top-3 highest-rated movies as seeds, fan out via hybrid
+    recs from each, then merge unique candidates by best score.
+
+    Cold-start fallback: popular by genres user has already engaged with, then
+    overall top-rated. Returns at most top_n movies, deduped.
+    """
+    if not user_id:
+        return list(Movie.objects.order_by('-rating')[:top_n])
+
+    interactions = UserInteraction.objects.filter(user_id=user_id)
+    interaction_count = interactions.count()
+
+    if interaction_count == 0:
+        return list(Movie.objects.order_by('-rating')[:top_n])
+
+    seen_movie_ids = set(interactions.values_list('movie_id', flat=True))
+
+    # Pick up to 3 seed movies the user rated highly (≥7) — fall back to anything they engaged with
+    seeds = list(
+        interactions.filter(rating__gte=7).order_by('-rating', '-created_at')[:3]
+        .values_list('movie_id', flat=True)
+    )
+    if not seeds:
+        seeds = list(interactions.order_by('-created_at')[:3].values_list('movie_id', flat=True))
+
+    # Fan out: hybrid recs from each seed
+    candidates = {}
+    for seed_id in seeds:
+        recs = get_hybrid_recommendations(
+            movie_id=seed_id, user_id=user_id, top_n=top_n
+        )
+        for rank, m in enumerate(recs):
+            score = 1.0 - rank / max(len(recs), 1)
+            if m.id in seen_movie_ids:
+                continue
+            candidates[m.id] = max(candidates.get(m.id, 0.0), score)
+
+    # If no seeds (shouldn't happen given guard above) or empty candidates,
+    # fall back to genre-based popularity from user's liked genres.
+    if not candidates:
+        liked_genre_ids = list(
+            Genre.objects.filter(movies__id__in=seen_movie_ids)
+            .values_list('id', flat=True).distinct()
+        )
+        qs = (Movie.objects.filter(genres__in=liked_genre_ids)
+              .exclude(id__in=seen_movie_ids)
+              .distinct().order_by('-rating'))
+        return list(qs[:top_n])
+
+    # Sort merged candidates and fetch movies
+    sorted_ids = [mid for mid, _ in sorted(candidates.items(), key=lambda x: x[1], reverse=True)]
+    movies_by_id = {m.id: m for m in Movie.objects.filter(id__in=sorted_ids[:top_n]).prefetch_related('genres')}
+    return [movies_by_id[mid] for mid in sorted_ids[:top_n] if mid in movies_by_id]
 
 
 def get_recommendations(movie_id=None, user_id=None, top_n=5):
