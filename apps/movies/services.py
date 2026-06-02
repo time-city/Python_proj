@@ -282,20 +282,15 @@ def _content_scores_for(movie_id, top_n):
             scores[ids[fidx]] = float(sim)
     return scores
 
-
+@auto_cache_ai(timeout=3600)
 def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
     """
-    Three-way weighted fusion. Weights are chosen by intent:
-      - Seed movie given ("similar to this") → content dominates, CF only re-ranks
-        the content pool. Prevents CF from pulling in globally-liked but unrelated items.
-      - No seed (home feed)                  → CF dominates, content nudges.
+    Three-way weighted fusion.
     """
     if movie_id:
-        # "Similar to this movie" intent — content is primary, CF is the personalization layer
         ALPHA, BETA, GAMMA = 0.25, 0.60, 0.15
         seed_provided = True
     else:
-        # "For you" feed intent — CF is primary, content scores are 0 anyway (no seed)
         ALPHA, BETA, GAMMA = 0.55, 0.30, 0.15
         seed_provided = False
 
@@ -308,7 +303,6 @@ def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
         for rank, mid in enumerate(cf_ids):
             cf_scores[mid] = 1.0 - rank / n if n else 0.0
 
-    # Build the exclude set: seed movie + everything user has already interacted with
     exclude_ids = set()
     if movie_id:
         exclude_ids.add(movie_id)
@@ -318,9 +312,6 @@ def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
             .values_list('movie_id', flat=True)
         )
 
-    # Candidate pool depends on intent:
-    # - With seed: only movies similar to seed (content pool). CF re-ranks within.
-    # - Without seed: union of CF picks + (empty) content pool.
     if seed_provided:
         all_ids = set(content_scores) - exclude_ids
     else:
@@ -332,10 +323,14 @@ def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
 
     results = []
     today = date.today()
+    
+    # --- ĐOẠN TỐI ƯU CỨU SỐNG SERVER ---
+    # Thay vì lặp 200 lần, ta lấy TẤT CẢ phim trong 1 câu SQL duy nhất và lưu sẵn vào RAM
+    movies_dict = {m.id: m for m in Movie.objects.filter(id__in=all_ids).prefetch_related('genres')}
+    
     for mid in all_ids:
-        try:
-            movie = Movie.objects.get(id=mid)
-        except Movie.DoesNotExist:
+        movie = movies_dict.get(mid) # Lấy từ RAM, không chọc DB
+        if not movie:
             continue
 
         c_score = content_scores.get(mid, 0.0)
@@ -355,12 +350,12 @@ def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
 
     results.sort(key=lambda x: x[1], reverse=True)
 
-    # Diversity re-ranking — avoid one-genre dominance
     seen_genres = set()
     diverse = []
     remainder = []
     for movie, _score in results:
-        genres = set(movie.genres.values_list('id', flat=True))
+        # Lấy thể loại từ RAM (vì đã dùng prefetch_related ở trên), chặn đứng N+1 Query
+        genres = {g.id for g in movie.genres.all()}
         if not genres & seen_genres:
             diverse.append(movie)
             seen_genres |= genres
@@ -453,8 +448,94 @@ def get_recommendations(movie_id=None, user_id=None, top_n=5):
 
     return get_hybrid_recommendations(movie_id=movie_id, user_id=user_id, top_n=top_n)
 
-
 def _content_only_recommendations(movie_id, top_n):
+    """Legacy content-only path — 0.7*cosine + 0.3*(rating/max) with Jaccard fallback."""
+    try:
+        # Nhớ kéo theo genres để khỏi bị N+1 sau này
+        target_movie = Movie.objects.prefetch_related('genres').get(id=movie_id)
+    except Movie.DoesNotExist:
+        return []
+
+    ids, embeddings, index, max_rating = load_embeddings()
+
+    if index is not None and movie_id in ids:
+        import faiss
+
+        idx = ids.index(movie_id)
+        query_vec = np.asarray(embeddings[idx]).reshape(1, -1).astype('float32').copy()
+        faiss.normalize_L2(query_vec)
+
+        n_search = top_n + 1
+        similarity_scores, faiss_indices = index.search(query_vec, n_search)
+        similarity_scores = similarity_scores[0]
+        faiss_indices = faiss_indices[0]
+
+        max_rating = max_rating or 10.0
+
+        # TỐI ƯU: Thu thập tất cả candidate_ids hợp lệ
+        valid_candidate_ids = []
+        for faiss_idx in faiss_indices:
+            if 0 <= faiss_idx < len(ids):
+                candidate_id = ids[faiss_idx]
+                if candidate_id != movie_id:
+                    valid_candidate_ids.append(candidate_id)
+
+        # Truy vấn Database ĐÚNG 1 LẦN cho tất cả các phim, có kèm theo genres
+        candidate_movies_dict = {
+            m.id: m for m in Movie.objects.filter(id__in=valid_candidate_ids).prefetch_related('genres')
+        }
+
+        weighted = []
+        for faiss_idx, sim_score in zip(faiss_indices, similarity_scores):
+            if faiss_idx < 0 or faiss_idx >= len(ids):
+                continue
+            candidate_id = ids[faiss_idx]
+            if candidate_id == movie_id:
+                continue
+            
+            # Lấy phim từ RAM thay vì chọc Database
+            candidate = candidate_movies_dict.get(candidate_id)
+            if not candidate:
+                continue
+
+            rating_score = float(candidate.rating or 0) / float(max_rating)
+            final_score = 0.7 * float(sim_score) + 0.3 * rating_score
+            weighted.append((candidate, final_score))
+
+        weighted.sort(key=lambda x: x[1], reverse=True)
+        recommendations = [item[0] for item in weighted[:top_n]]
+
+        if len(recommendations) < top_n:
+            exclude_ids = [m.id for m in recommendations] + [movie_id]
+            # Nhớ thêm prefetch_related ở đây nữa
+            others = Movie.objects.exclude(id__in=exclude_ids).prefetch_related('genres').order_by('-rating')[:top_n - len(recommendations)]
+            recommendations.extend(others)
+
+        return recommendations
+
+    # Genre + Jaccard fallback
+    target_genres = target_movie.genres.all()
+    # Tối ưu: Thêm prefetch_related cho phần fallback
+    candidates = Movie.objects.filter(genres__in=target_genres).exclude(id=movie_id).prefetch_related('genres').distinct()
+
+    target_meta = f"{target_movie.title} {target_movie.ai_metadata or ''}"
+    scored = []
+    for candidate in candidates:
+        candidate_meta = f"{candidate.title} {candidate.ai_metadata or ''}"
+        similarity = calculate_similarity(target_meta, candidate_meta)
+        score = similarity * (float(candidate.rating) or 5.0)
+        scored.append((candidate, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    recommendations = [item[0] for item in scored[:top_n]]
+
+    if len(recommendations) < top_n:
+        exclude_ids = [m.id for m in recommendations] + [movie_id]
+        # Thêm prefetch_related
+        others = Movie.objects.exclude(id__in=exclude_ids).prefetch_related('genres').order_by('-rating')[:top_n - len(recommendations)]
+        recommendations.extend(others)
+
+    return recommendations
     """Legacy content-only path — 0.7*cosine + 0.3*(rating/max) with Jaccard fallback."""
     try:
         target_movie = Movie.objects.get(id=movie_id)
