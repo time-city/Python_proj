@@ -2,6 +2,9 @@ import os
 import pickle
 import re
 from datetime import date
+from functools import wraps
+from django.utils.text import slugify
+from django.core.cache import cache
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -25,6 +28,27 @@ _user_factors = None
 _item_factors = None
 _cf_user_index = None
 _cf_item_index = None
+
+def auto_cache_ai(timeout=3600):
+    """
+    Decorator tự động hóa việc tạo Key và lưu Cache cho các hàm AI nặng.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            args_str = "_".join([str(a) for a in args if not hasattr(a, '__dict__')])
+            kwargs_str = "_".join([f"{k}_{v}" for k, v in kwargs.items() if not hasattr(v, '__dict__')])
+            raw_key = f"ai_{func.__name__}_{args_str}_{kwargs_str}"
+            
+            cache_key = slugify(raw_key).replace('-', '_')[:200]
+            
+            result = cache.get(cache_key)
+            if result is None:
+                result = func(*args, **kwargs)
+                cache.set(cache_key, result, timeout)
+            return result
+        return wrapper
+    return decorator
 
 
 def get_semantic_model():
@@ -62,7 +86,7 @@ def load_embeddings():
 
     return _movie_ids, _movie_embeddings, _faiss_index, _max_rating
 
-
+@auto_cache_ai(timeout=3600)
 def semantic_search(query, top_k=20):
     """
     Hybrid search: PostgreSQL BM25 (ts_rank_cd) + cosine (FAISS / sentence-transformers),
@@ -349,7 +373,7 @@ def get_hybrid_recommendations(movie_id=None, user_id=None, top_n=10):
         diverse.extend(remainder[:top_n - len(diverse)])
     return diverse[:top_n]
 
-
+@auto_cache_ai(timeout=3600)
 def get_user_feed(user_id, top_n=24):
     """
     Personalized home feed.
@@ -407,7 +431,7 @@ def get_user_feed(user_id, top_n=24):
     movies_by_id = {m.id: m for m in Movie.objects.filter(id__in=sorted_ids[:top_n]).prefetch_related('genres')}
     return [movies_by_id[mid] for mid in sorted_ids[:top_n] if mid in movies_by_id]
 
-
+@auto_cache_ai(timeout=3600)
 def get_recommendations(movie_id=None, user_id=None, top_n=5):
     """
     Public API. Staged cold-start fallback based on how much user data exists.
