@@ -1,70 +1,88 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib import messages
+from django.core.cache import cache # BẮT BUỘC PHẢI CÓ DÒNG NÀY ĐỂ TRÁNH LỖI NAMEERROR
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger # THÊM THƯ VIỆN PHÂN TRANG
+from django.utils.text import slugify
+
 from .models import Movie, Review, Genre, UserInteraction
 from .services import analyze_sentiment, get_recommendations, get_user_feed, semantic_search
 from .forms import MovieForm
-from django.utils.text import slugify
+
 
 def home(request):
-    """
-    Home page. Shows personalized feed for logged-in users with interaction history,
-    falls back to newest movies otherwise. Search/genre filters take precedence.
-    """
     query = request.GET.get('q')
     vibe = request.GET.get('vibe')
     genre_slug = request.GET.get('genre')
+    
+    # Lấy số trang hiện tại từ URL (mặc định là trang 1)
+    page_number = request.GET.get('page', 1) 
 
     is_personalized = False
-
-    # 1. TỐI ƯU CƠ BẢN: Chuẩn bị QuerySet gốc có sẵn prefetch_related
-    # Việc này chặn đứng hàng trăm câu SQL khi render {{ movie.genres.all }} ở HTML
     base_qs = Movie.objects.prefetch_related('genres')
 
     if vibe:
-        movies = semantic_search(vibe, top_k=24)
+        cache_key = f"vibe_search_{slugify(vibe)}"
+        movies = cache.get(cache_key)
+        if not movies:
+            movies = semantic_search(vibe, top_k=100) # AI tìm 100 phim
+            cache.set(cache_key, movies, 3600)
         query = vibe
+
     elif query:
-        movies = semantic_search(query, top_k=24)
+        cache_key = f"query_search_{slugify(query)}"
+        movies = cache.get(cache_key)
+        if not movies:
+            movies = semantic_search(query, top_k=100)
+            cache.set(cache_key, movies, 3600)
+
     elif genre_slug:
-        movies = base_qs.filter(genres__slug=genre_slug).order_by('-rating')[:24] # Tối ưu: Thêm Limit 24
+        movies = base_qs.filter(genres__slug=genre_slug).order_by('-rating')
+
     elif request.user.is_authenticated:
-        feed = get_user_feed(request.user.id, top_n=24)
+        cache_key = f"user_feed_{request.user.id}"
+        feed = cache.get(cache_key)
+        
+        if feed is None: 
+            feed = get_user_feed(request.user.id, top_n=100) # AI tạo feed 100 phim
+            cache.set(cache_key, feed, 3600)
+
         if feed:
-            # Lưu ý: Nếu feed trả về List object thường, bạn cần kiểm tra hàm get_user_feed
-            # Nếu nó trả về QuerySet, hãy chắc chắn trong đó có gọi .prefetch_related('genres')
             movies = feed
             is_personalized = True
         else:
-            # 2. TỐI ƯU N+1 & TRÀN RAM: Thêm prefetch_related và GIỚI HẠN số lượng [:24]
-            movies = base_qs.order_by('-created_at')[:24] 
+            movies = base_qs.order_by('-created_at')
     else:
-        # Tương tự như trên
-        movies = base_qs.order_by('-created_at')[:24]
+        movies = base_qs.order_by('-created_at')
 
     if genre_slug and (vibe or query):
-        # Lưu ý: Đoạn này có thể lỗi nếu movies là kết quả từ semantic_search (List) chứ không phải QuerySet
-        # Hãy chắc chắn semantic_search trả về QuerySet hoặc bạn xử lý filter bằng Python list.
         if isinstance(movies, list):
             movies = [m for m in movies if any(g.slug == genre_slug for g in m.genres.all())]
         else:
             movies = movies.filter(genres__slug=genre_slug)
 
-    # 3. TỐI ƯU TRUY VẤN AI_PICK:
-    # Dùng order_by('?') trên bảng lớn rất chậm. 
-    # Nhưng vì là bản demo, tạm chấp nhận nếu bảng nhỏ. Nếu bảng lớn, nên bốc ngẫu nhiên id ở tầng Python.
+    # Cắt danh sách thành các trang (Ví dụ: 24 phim 1 trang)
+    paginator = Paginator(movies, 24) 
+    try:
+        movies_page = paginator.page(page_number)
+    except PageNotAnInteger:
+        movies_page = paginator.page(1)
+    except EmptyPage:
+        movies_page = paginator.page(paginator.num_pages)
+
     ai_pick = base_qs.filter(rating__gte=8.0).order_by('?').first()
-    
     genres = Genre.objects.all()
 
     context = {
-        'movies': movies,
+        'movies': movies_page, # Trả về movies_page (chỉ có 24 phim) thay vì toàn bộ
         'genres': genres,
         'current_genre': genre_slug,
         'ai_pick': ai_pick,
         'current_vibe': vibe,
         'is_personalized': is_personalized,
+        'query': query, # Trả thêm query để giữ thanh search lúc chuyển trang
     }
     return render(request, 'movies/home.html', context)
+
 
 def movie_detail(request, slug):
     """
@@ -92,6 +110,7 @@ def movie_detail(request, slug):
         'recommendations': recommendations
     }
     return render(request, 'movies/movie_detail.html', context)
+
 
 def add_review(request, slug):
     """
@@ -140,6 +159,7 @@ def add_review(request, slug):
         return redirect('movie_detail', slug=slug)
 
     return redirect('home')
+
 
 def upload_movie(request):
     """

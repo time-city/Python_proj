@@ -16,7 +16,6 @@
 </div>
 
 
-<!-- Loading Overlay -->
 <div id="loading-overlay"
     style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 9999; justify-content: center; align-items: center; flex-direction: column;">
     <div class="spinner"
@@ -71,4 +70,69 @@
     <p style="text-align: center; grid-column: 1/-1;">No movies found.</p>
     {% endfor %}
 </div>
+
+{% if movies.has_other_pages %}
+<div class="pagination-container" style="text-align: center; margin-top: 3rem; margin-bottom: 2rem;">
+    <ul class="pagination" style="display: inline-flex; flex-wrap: wrap; justify-content: center; list-style-type: none; padding: 0; gap: 0.5rem;">
+        
+        {% if movies.has_previous %}
+            <li>
+                <a href="?page={{ movies.previous_page_number }}{% if query %}&q={{ query }}{% endif %}{% if current_vibe %}&vibe={{ current_vibe }}{% endif %}{% if current_genre %}&genre={{ current_genre }}{% endif %}" 
+                   style="display: inline-block; padding: 0.5rem 1rem; background: #2a2a2a; color: white; border-radius: 8px; text-decoration: none;">&laquo; Lùi</a>
+            </li>
+        {% else %}
+            <li class="disabled">
+                <span style="display: inline-block; padding: 0.5rem 1rem; background: #1a1a1a; color: #666; border-radius: 8px;">&laquo; Lùi</span>
+            </li>
+        {% endif %}
+
+        {% for i in movies.paginator.page_range %}
+            
+            {% if i == 1 %}
+                {% if movies.number == 1 %}
+                    <li class="active"><span style="display: inline-block; padding: 0.5rem 1rem; background: #6366f1; color: white; border-radius: 8px; font-weight: bold;">1</span></li>
+                {% else %}
+                    <li><a href="?page=1{% if query %}&q={{ query }}{% endif %}{% if current_vibe %}&vibe={{ current_vibe }}{% endif %}{% if current_genre %}&genre={{ current_genre }}{% endif %}" style="display: inline-block; padding: 0.5rem 1rem; background: #2a2a2a; color: white; border-radius: 8px; text-decoration: none;">1</a></li>
+                {% endif %}
+                
+                {% if movies.number > 4 %}
+                    <li class="disabled"><span style="display: inline-block; padding: 0.5rem 1rem; color: #888;">...</span></li>
+                {% endif %}
+            
+            {% elif i == movies.paginator.num_pages %}
+                {% if movies.number < movies.paginator.num_pages|add:'-3' %}
+                    <li class="disabled"><span style="display: inline-block; padding: 0.5rem 1rem; color: #888;">...</span></li>
+                {% endif %}
+                
+                {% if movies.number == movies.paginator.num_pages %}
+                    <li class="active"><span style="display: inline-block; padding: 0.5rem 1rem; background: #6366f1; color: white; border-radius: 8px; font-weight: bold;">{{ i }}</span></li>
+                {% else %}
+                    <li><a href="?page={{ i }}{% if query %}&q={{ query }}{% endif %}{% if current_vibe %}&vibe={{ current_vibe }}{% endif %}{% if current_genre %}&genre={{ current_genre }}{% endif %}" style="display: inline-block; padding: 0.5rem 1rem; background: #2a2a2a; color: white; border-radius: 8px; text-decoration: none;">{{ i }}</a></li>
+                {% endif %}
+
+            {% elif i > movies.number|add:'-3' and i < movies.number|add:'3' %}
+                {% if movies.number == i %}
+                    <li class="active"><span style="display: inline-block; padding: 0.5rem 1rem; background: #6366f1; color: white; border-radius: 8px; font-weight: bold;">{{ i }}</span></li>
+                {% else %}
+                    <li><a href="?page={{ i }}{% if query %}&q={{ query }}{% endif %}{% if current_vibe %}&vibe={{ current_vibe }}{% endif %}{% if current_genre %}&genre={{ current_genre }}{% endif %}" style="display: inline-block; padding: 0.5rem 1rem; background: #2a2a2a; color: white; border-radius: 8px; text-decoration: none;">{{ i }}</a></li>
+                {% endif %}
+            {% endif %}
+            
+        {% endfor %}
+
+        {% if movies.has_next %}
+            <li>
+                <a href="?page={{ movies.next_page_number }}{% if query %}&q={{ query }}{% endif %}{% if current_vibe %}&vibe={{ current_vibe }}{% endif %}{% if current_genre %}&genre={{ current_genre }}{% endif %}" 
+                   style="display: inline-block; padding: 0.5rem 1rem; background: #2a2a2a; color: white; border-radius: 8px; text-decoration: none;">Tới &raquo;</a>
+            </li>
+        {% else %}
+            <li class="disabled">
+                <span style="display: inline-block; padding: 0.5rem 1rem; background: #1a1a1a; color: #666; border-radius: 8px;">Tới &raquo;</span>
+            </li>
+        {% endif %}
+
+    </ul>
+</div>
+{% endif %}
+
 {% endblock %}
